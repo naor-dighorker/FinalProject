@@ -1,0 +1,52 @@
+body {
+	font-size: 100%:
+}
+
+p{
+	text-align: center;
+ 	line-height: 1.8;
+}
+
+.first-inst {
+	text-align: center;
+	word-spacing: 10px;
+	font-family: Arial, Helvetica, sans-serif;
+	font-weight: 100;	
+	font-size: 60px;
+	line-height: 1.8;
+}
+
+.second-inst {
+	text-align: center;
+	font-family: "Open Sans", sans-serif;
+  	font-size: 20px;
+	color: gray;
+	line-height: 2.25;
+	margin-bottom: 20px;
+}
+
+.wrapper {
+	text-align: center;
+	margin-bottom: 80px;
+}
+
+.btn {
+	background-color: DodgerBlue;
+	border: none;
+  	color: white;
+  	padding: 20px 36px;
+  	text-align: center;
+	text-decoration: none;
+	display: inline-block;
+ 	font-size: 22px;
+ 	cursor: pointer;
+}
+
+.btn:hover {
+	background-color: DarkBlue;
+}
+
+.last-img {
+	text-align: center;	
+}
+
